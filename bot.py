@@ -12,11 +12,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Получаем токен из переменных окружения
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 
 if not BOT_TOKEN:
-    logger.error("❌ BOT_TOKEN не установлен! Добавьте его в Environment Variables в Render.")
+    logger.error("❌ BOT_TOKEN не установлен!")
     exit(1)
 
 # Состояния
@@ -26,7 +25,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /start - показывает главное меню"""
     await update.message.reply_text(
         "🎵 Добро пожаловать в MP3 Tag Editor!\n\n"
-        "Отправьте мне MP3-файл, а затем используйте кнопки ниже для редактирования тегов.",
+        "📱 **Как использовать:**\n"
+        "1. Отправьте MP3 файл\n"
+        "2. Используйте кнопки для редактирования\n"
+        "3. Для обложки: нажмите 'Изменить обложку' → выберите фото из галереи",
         reply_markup=get_main_menu()
     )
 
@@ -46,18 +48,12 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Сохраняем информацию о файле
         context.user_data['current_file_path'] = file_path
-        context.user_data['original_file_id'] = audio_file.file_id
         
-        # Проверяем текущие теги
-        try:
-            audio = MP3(file_path, ID3=ID3)
-            if audio.tags is None:
-                audio.add_tags()
-                audio.save()
-        except Exception as e:
-            logger.error(f"Ошибка инициализации тегов: {e}")
-        
-        await update.message.reply_text("✅ Файл получен! Выберите действие:", reply_markup=get_main_menu())
+        await update.message.reply_text(
+            "✅ Файл получен!\n\n"
+            "📱 **Совет:** При отправке обложки просто выберите фото из галереи телефона",
+            reply_markup=get_main_menu()
+        )
         
     except Exception as e:
         logger.error(f"Ошибка при обработке аудио: {e}")
@@ -77,7 +73,17 @@ def get_main_menu():
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обрабатывает нажатия кнопок"""
     query = update.callback_query
-    await query.answer()
+    
+    try:
+        await query.answer()  # Подтверждаем нажатие кнопки
+    except Exception as e:
+        # Игнорируем ошибки устаревших callback query
+        if "too old" in str(e) or "timeout" in str(e) or "invalid" in str(e):
+            logger.warning(f"Пропущен устаревший callback: {e}")
+            return
+        else:
+            logger.error(f"Ошибка в callback: {e}")
+            return
     
     if 'current_file_path' not in context.user_data:
         await query.edit_message_text("❌ Сначала отправьте мне MP3-файл.")
@@ -94,7 +100,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['waiting_for'] = WAITING_FOR_ARTIST
         
     elif data == "change_cover":
-        await query.edit_message_text("🖼️ Отправьте обложку для аудиозаписи:")
+        await query.edit_message_text(
+            "🖼️ **Отправьте обложку из галереи телефона:**\n\n"
+            "1. 📱 Нажмите на скрепку\n"
+            "2. 🖼️ Выберите 'Галерея' или 'Фото'\n" 
+            "3. ✅ Выберите изображение\n"
+            "4. 📤 Отправьте как фото\n\n"
+            "_Бот автоматически установит обложку_"
+        )
         context.user_data['waiting_for'] = WAITING_FOR_PHOTO
         
     elif data == "show_tags":
@@ -118,25 +131,22 @@ async def show_current_tags(query, context):
         if 'TPE1' in audio:
             artist = str(audio['TPE1'])
         
-        # ПРОВЕРКА ОБЛОЖКИ - ИСПРАВЛЕННАЯ
+        # Проверяем обложку
         has_cover = False
-        cover_size = 0
+        cover_info = ""
         if audio.tags:
             for key in audio.tags.keys():
                 if key.startswith('APIC'):
                     has_cover = True
-                    cover_size = len(audio.tags[key].data)
+                    cover_info = f" ({len(audio.tags[key].data)} байт)"
                     break
         
         tags_info = (
             "📊 Текущие теги:\n\n"
             f"📝 Название: {title}\n"
             f"🎤 Исполнитель: {artist}\n"
-            f"🖼️ Обложка: {'✅ Есть' if has_cover else '❌ Нет'}"
+            f"🖼️ Обложка: {'✅ Есть' + cover_info if has_cover else '❌ Нет'}"
         )
-        
-        if has_cover:
-            tags_info += f"\n📏 Размер обложки: {cover_size} байт"
         
         await query.edit_message_text(tags_info, reply_markup=get_main_menu())
         
@@ -155,7 +165,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         audio = MP3(file_path, ID3=ID3)
         
-        # Убедимся, что теги существуют
         if audio.tags is None:
             audio.add_tags()
         
@@ -176,7 +185,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Ошибка при изменении тега: {e}")
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обрабатывает отправку фотографии из галереи"""
+    """Обрабатывает отправку фотографии ИЗ ГАЛЕРЕИ ТЕЛЕФОНА"""
     if 'waiting_for' not in context.user_data or context.user_data['waiting_for'] != WAITING_FOR_PHOTO:
         return
     
@@ -184,7 +193,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     photo_path = f"temp_cover_{update.update_id}.jpg"
     
     try:
-        # Берем фото с наибольшим разрешением
+        # Сообщаем о начале обработки
+        await update.message.reply_text("⏳ Обрабатываю обложку...")
+        
+        # Берем фото с НАИЛУЧШИМ качеством (последнее в массиве - самое большое)
         photo_file = await update.message.photo[-1].get_file()
         await photo_file.download_to_drive(photo_path)
         
@@ -192,55 +204,58 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with open(photo_path, 'rb') as f:
             cover_data = f.read()
         
-        logger.info(f"📸 Размер обложки: {len(cover_data)} байт")
+        file_size_kb = len(cover_data) / 1024
+        logger.info(f"📸 Обложка из галереи: {file_size_kb:.1f} КБ")
         
-        # Обрабатываем MP3 файл - ОТКРЫВАЕМ ЗАНОВО
+        # Обрабатываем MP3 файл
         audio = MP3(file_path, ID3=ID3)
         
-        # Убедимся, что теги существуют
         if audio.tags is None:
             audio.add_tags()
         
-        # Удаляем ВСЕ старые обложки
-        apic_keys = [key for key in audio.tags.keys() if key.startswith('APIC')]
-        for key in apic_keys:
-            del audio.tags[key]
-            logger.info(f"🗑️ Удалена старая обложка: {key}")
+        # Удаляем старые обложки
+        for key in list(audio.tags.keys()):
+            if key.startswith('APIC'):
+                del audio.tags[key]
         
         # Добавляем новую обложку
         audio.tags.add(
             APIC(
                 encoding=3,
                 mime='image/jpeg',
-                type=3,  # 3 = обложка альбома
+                type=3,  # Обложка альбома
                 desc='Cover',
                 data=cover_data
             )
         )
         
-        # ВАЖНО: Сохраняем с указанием версии
-        audio.save(v2_version=3)
-        logger.info("✅ Обложка добавлена в файл")
+        # Сохраняем
+        audio.save()
         
-        # ПРОВЕРЯЕМ что обложка сохранилась
+        # Проверяем что обложка сохранилась
         audio_check = MP3(file_path, ID3=ID3)
-        has_cover_after = any(key.startswith('APIC') for key in audio_check.tags.keys()) if audio_check.tags else False
-        logger.info(f"🔍 Проверка после сохранения: обложка {'есть' if has_cover_after else 'нет'}")
+        has_cover = any(key.startswith('APIC') for key in audio_check.tags.keys()) if audio_check.tags else False
         
-        # Убираем состояние ожидания
         del context.user_data['waiting_for']
         
-        if has_cover_after:
-            await update.message.reply_text("✅ Обложка успешно обновлена!", reply_markup=get_main_menu())
+        if has_cover:
+            await update.message.reply_text(
+                f"✅ Обложка успешно установлена!\n"
+                f"📏 Размер: {file_size_kb:.1f} КБ\n"
+                f"💾 Сохранено в MP3",
+                reply_markup=get_main_menu()
+            )
         else:
             await update.message.reply_text("❌ Обложка не сохранилась в файле", reply_markup=get_main_menu())
         
     except Exception as e:
         logger.error(f"❌ Ошибка при установке обложки: {e}")
-        await update.message.reply_text(f"❌ Ошибка при установке обложки: {str(e)}")
+        await update.message.reply_text(
+            f"❌ Ошибка при установке обложки:\n{str(e)}",
+            reply_markup=get_main_menu()
+        )
         
     finally:
-        # Удаляем временный файл обложки
         if os.path.exists(photo_path):
             os.remove(photo_path)
 
@@ -249,15 +264,11 @@ async def send_edited_file(query, context):
     file_path = context.user_data['current_file_path']
     
     try:
-        # Проверяем теги перед отправкой
         audio = MP3(file_path, ID3=ID3)
         title = str(audio['TIT2']) if 'TIT2' in audio else "Не указано"
         artist = str(audio['TPE1']) if 'TPE1' in audio else "Не указано"
         
-        # Проверяем обложку
-        has_cover = False
-        if audio.tags:
-            has_cover = any(key.startswith('APIC') for key in audio.tags.keys())
+        has_cover = any(key.startswith('APIC') for key in audio.tags.keys()) if audio.tags else False
         
         caption = (
             f"✅ Ваш отредактированный файл!\n\n"
@@ -274,13 +285,13 @@ async def send_edited_file(query, context):
                 performer=artist
             )
         
-        # Очищаем временные файлы
+        # Очистка
         if os.path.exists(file_path):
             os.remove(file_path)
         if 'current_file_path' in context.user_data:
             del context.user_data['current_file_path']
             
-        await query.message.reply_text("🎉 Файл отправлен! Что дальше?", reply_markup=get_main_menu())
+        await query.message.reply_text("🎉 Файл отправлен!", reply_markup=get_main_menu())
             
     except Exception as e:
         await query.edit_message_text(f"❌ Ошибка при отправке файла: {e}")
@@ -288,27 +299,28 @@ async def send_edited_file(query, context):
 def main():
     """Запускает бота"""
     try:
-        # Создаем Application
         application = Application.builder().token(BOT_TOKEN).build()
         
-        # Обработчики команд
         application.add_handler(CommandHandler("start", start))
-        
-        # Обработчики кнопок
         application.add_handler(CallbackQueryHandler(button_handler))
-        
-        # Обработчики сообщений
         application.add_handler(MessageHandler(filters.AUDIO, handle_audio))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
         application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
         
-        # Запускаем бота
-        print("🚀 Бот успешно запущен!")
-        application.run_polling()
+        # Добавляем обработчик ошибок
+        async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            logger.error(f"Ошибка в боте: {context.error}")
+        
+        application.add_error_handler(error_handler)
+        
+        print("🚀 Бот запущен! Готов принимать обложки из галереи телефона!")
+        application.run_polling(
+            drop_pending_updates=True,
+            allowed_updates=Update.ALL_TYPES
+        )
         
     except Exception as e:
         logger.error(f"Ошибка при запуске бота: {e}")
-        print(f"❌ Критическая ошибка: {e}")
 
 if __name__ == '__main__':
     main()
