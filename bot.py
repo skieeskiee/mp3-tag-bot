@@ -1,5 +1,8 @@
 import os
 import logging
+import requests
+import threading
+import time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from mutagen.mp3 import MP3
@@ -21,6 +24,40 @@ if not BOT_TOKEN:
 # Состояния
 WAITING_FOR_TITLE, WAITING_FOR_ARTIST, WAITING_FOR_PHOTO = range(3)
 
+def keep_alive():
+    """Пингует сервер чтобы предотвратить сон на Render"""
+    def ping():
+        while True:
+            try:
+                # Получаем URL из переменных окружения или используем дефолтный
+                render_url = os.environ.get('RENDER_URL', 'https://your-bot-name.onrender.com')
+                
+                # Отправляем GET запрос
+                response = requests.get(render_url, timeout=10)
+                
+                if response.status_code == 200:
+                    logger.info(f"🏓 Успешный ping в {time.strftime('%H:%M:%S')}")
+                else:
+                    logger.warning(f"⚠️ Ping вернул статус {response.status_code}")
+                    
+            except requests.exceptions.RequestException as e:
+                logger.error(f"❌ Ошибка ping: {e}")
+            except Exception as e:
+                logger.error(f"❌ Неожиданная ошибка: {e}")
+            
+            # Ждем 10 минут перед следующим ping
+            time.sleep(600)
+    
+    try:
+        thread = threading.Thread(target=ping)
+        thread.daemon = True  # Поток завершится при завершении main потока
+        thread.start()
+        logger.info("🔄 Keep-alive запущен (ping каждые 10 минут)")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Не удалось запустить keep-alive: {e}")
+        return False
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /start - показывает главное меню"""
     await update.message.reply_text(
@@ -41,12 +78,25 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Пожалуйста, отправьте файл в формате MP3.")
             return
 
-        # Скачиваем файл
+        # ⚠️ ВАЖНО: Очищаем предыдущие данные
+        if 'current_file_path' in context.user_data:
+            old_path = context.user_data['current_file_path']
+            if os.path.exists(old_path):
+                try:
+                    os.remove(old_path)
+                    logger.info(f"🗑️ Удален старый файл: {old_path}")
+                except Exception as e:
+                    logger.warning(f"Не удалось удалить старый файл: {e}")
+        
+        # Очищаем состояние
+        context.user_data.clear()
+
+        # Скачиваем новый файл
         file = await audio_file.get_file()
-        file_path = f"temp_{audio_file.file_id}.mp3"
+        file_path = f"temp_{audio_file.file_id}_{update.update_id}.mp3"
         await file.download_to_drive(file_path)
         
-        # Сохраняем информацию о файле
+        # Сохраняем информацию о новом файле
         context.user_data['current_file_path'] = file_path
         
         await update.message.reply_text(
@@ -187,9 +237,23 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обрабатывает отправку фотографии ИЗ ГАЛЕРЕИ ТЕЛЕФОНА"""
     if 'waiting_for' not in context.user_data or context.user_data['waiting_for'] != WAITING_FOR_PHOTO:
+        logger.warning("❌ Получено фото, но бот не ожидает обложку")
         return
     
+    # ⚠️ ПРОВЕРКА: Есть ли MP3 файл
+    if 'current_file_path' not in context.user_data:
+        await update.message.reply_text("❌ Сначала отправьте MP3 файл")
+        return
+        
     file_path = context.user_data['current_file_path']
+    
+    # ⚠️ ПРОВЕРКА: Существует ли файл
+    if not os.path.exists(file_path):
+        await update.message.reply_text("❌ Файл MP3 не найден. Отправьте файл заново.")
+        if 'current_file_path' in context.user_data:
+            del context.user_data['current_file_path']
+        return
+    
     photo_path = f"temp_cover_{update.update_id}.jpg"
     
     try:
@@ -299,6 +363,9 @@ async def send_edited_file(query, context):
 def main():
     """Запускает бота"""
     try:
+        # 🆕 Запускаем keep-alive для предотвращения сна
+        keep_alive()
+        
         application = Application.builder().token(BOT_TOKEN).build()
         
         application.add_handler(CommandHandler("start", start))
@@ -313,7 +380,8 @@ def main():
         
         application.add_error_handler(error_handler)
         
-        print("🚀 Бот запущен! Готов принимать обложки из галереи телефона!")
+        logger.info("🚀 Бот запущен! Готов принимать обложки из галереи телефона!")
+        
         application.run_polling(
             drop_pending_updates=True,
             allowed_updates=Update.ALL_TYPES
