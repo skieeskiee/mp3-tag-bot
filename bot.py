@@ -5,6 +5,7 @@ import threading
 import time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+from telegram.error import Conflict
 from mutagen.mp3 import MP3
 from mutagen.id3 import ID3, TIT2, TPE1, APIC
 
@@ -29,19 +30,24 @@ def keep_alive():
     def ping():
         while True:
             try:
-                # Получаем URL из переменных окружения или используем дефолтный
-                render_url = os.environ.get('RENDER_URL', 'https://your-bot-name.onrender.com')
+                # Получаем URL из переменных окружения
+                render_url = os.environ.get('RENDER_URL')
                 
-                # Отправляем GET запрос
+                if not render_url:
+                    logger.warning("⚠️ RENDER_URL не установлен, ping пропущен")
+                    time.sleep(600)
+                    continue
+                
+                # Пингуем корневой URL
                 response = requests.get(render_url, timeout=10)
                 
                 if response.status_code == 200:
                     logger.info(f"🏓 Успешный ping в {time.strftime('%H:%M:%S')}")
                 else:
-                    logger.warning(f"⚠️ Ping вернул статус {response.status_code}")
+                    logger.info(f"🔄 Ping вернул статус {response.status_code} (ожидаем 200)")
                     
             except requests.exceptions.RequestException as e:
-                logger.error(f"❌ Ошибка ping: {e}")
+                logger.info(f"🌐 Ошибка сети при ping: {e}")
             except Exception as e:
                 logger.error(f"❌ Неожиданная ошибка: {e}")
             
@@ -50,9 +56,9 @@ def keep_alive():
     
     try:
         thread = threading.Thread(target=ping)
-        thread.daemon = True  # Поток завершится при завершении main потока
+        thread.daemon = True
         thread.start()
-        logger.info("🔄 Keep-alive запущен (ping каждые 10 минут)")
+        logger.info("🔄 Keep-alive запущен (пингуем каждые 10 минут)")
         return True
     except Exception as e:
         logger.error(f"❌ Не удалось запустить keep-alive: {e}")
@@ -382,13 +388,16 @@ def main():
         
         logger.info("🚀 Бот запущен! Готов принимать обложки из галереи телефона!")
         
+        # Упрощенный запуск polling
         application.run_polling(
             drop_pending_updates=True,
-            allowed_updates=Update.ALL_TYPES
+            # allowed_updates=Update.ALL_TYPES  # Убрал эту строку чтобы избежать ошибки
         )
         
+    except Conflict as e:
+        logger.error(f"❌ Конфликт: Бот уже запущен. Ошибка: {e}")
     except Exception as e:
-        logger.error(f"Ошибка при запуске бота: {e}")
+        logger.error(f"❌ Ошибка при запуске бота: {e}")
 
 if __name__ == '__main__':
     main()
