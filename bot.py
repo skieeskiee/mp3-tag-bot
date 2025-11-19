@@ -1,7 +1,7 @@
 import os
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler, Filters, CallbackContext
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from mutagen.mp3 import MP3
 from mutagen.id3 import ID3, TIT2, TPE1, APIC
 
@@ -22,7 +22,7 @@ if not BOT_TOKEN:
 # Состояния
 WAITING_FOR_TITLE, WAITING_FOR_ARTIST, WAITING_FOR_PHOTO = range(3)
 
-def start(update: Update, context: CallbackContext):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /start - показывает главное меню"""
     keyboard = [
         [InlineKeyboardButton("📝 Изменить название", callback_data="change_title")],
@@ -33,24 +33,24 @@ def start(update: Update, context: CallbackContext):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    update.message.reply_text(
+    await update.message.reply_text(
         "🎵 Добро пожаловать в MP3 Tag Editor!\n\n"
         "Отправьте мне MP3-файл, а затем используйте кнопки ниже для редактирования тегов.",
         reply_markup=reply_markup
     )
 
-def handle_audio(update: Update, context: CallbackContext):
+async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обрабатывает входящий MP3-файл"""
     audio_file = update.message.audio
     
     if audio_file.mime_type != "audio/mpeg":
-        update.message.reply_text("❌ Пожалуйста, отправьте файл в формате MP3.")
+        await update.message.reply_text("❌ Пожалуйста, отправьте файл в формате MP3.")
         return
 
     # Скачиваем файл
-    file = audio_file.get_file()
+    file = await audio_file.get_file()
     file_path = f"temp_{audio_file.file_id}.mp3"
-    file.download(file_path)
+    await file.download_to_drive(file_path)
     
     # Сохраняем информацию о файле
     context.user_data['current_file_path'] = file_path
@@ -65,9 +65,9 @@ def handle_audio(update: Update, context: CallbackContext):
     except Exception as e:
         logger.error(f"Ошибка инициализации тегов: {e}")
     
-    show_main_menu(update.message, "✅ Файл получен! Выберите действие:")
+    await show_main_menu(update.message, "✅ Файл получен! Выберите действие:")
 
-def show_main_menu(message, text="Выберите действие:"):
+async def show_main_menu(message, text="Выберите действие:"):
     """Показывает главное меню с кнопками"""
     keyboard = [
         [InlineKeyboardButton("📝 Изменить название", callback_data="change_title")],
@@ -77,41 +77,41 @@ def show_main_menu(message, text="Выберите действие:"):
         [InlineKeyboardButton("📥 Скачать файл", callback_data="download_file")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    message.reply_text(text, reply_markup=reply_markup)
+    await message.reply_text(text, reply_markup=reply_markup)
 
-def button_handler(update: Update, context: CallbackContext):
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обрабатывает нажатия кнопок"""
     query = update.callback_query
-    query.answer()
+    await query.answer()
     
     if 'current_file_path' not in context.user_data:
-        query.edit_message_text("❌ Сначала отправьте мне MP3-файл.")
+        await query.edit_message_text("❌ Сначала отправьте мне MP3-файл.")
         return
     
     data = query.data
     
     if data == "change_title":
-        query.edit_message_text("✏️ Введите новое название для аудиозаписи:")
+        await query.edit_message_text("✏️ Введите новое название для аудиозаписи:")
         context.user_data['waiting_for'] = WAITING_FOR_TITLE
         
     elif data == "change_artist":
-        query.edit_message_text("🎤 Введите имя исполнителя:")
+        await query.edit_message_text("🎤 Введите имя исполнителя:")
         context.user_data['waiting_for'] = WAITING_FOR_ARTIST
         
     elif data == "change_cover":
-        query.edit_message_text("🖼️ Отправьте обложку для аудиозаписи:")
+        await query.edit_message_text("🖼️ Отправьте обложку для аудиозаписи:")
         context.user_data['waiting_for'] = WAITING_FOR_PHOTO
         
     elif data == "show_tags":
-        show_current_tags(query, context)
+        await show_current_tags(query, context)
         
     elif data == "download_file":
-        send_edited_file(query, context)
+        await send_edited_file(query, context)
         
     elif data == "back_to_menu":
-        show_main_menu(query.message, "Главное меню:")
+        await show_main_menu(query.message, "Главное меню:")
 
-def show_current_tags(query, context):
+async def show_current_tags(query, context):
     """Показывает текущие теги файла"""
     file_path = context.user_data['current_file_path']
     
@@ -144,12 +144,12 @@ def show_current_tags(query, context):
         keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="back_to_menu")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        query.edit_message_text(tags_info, reply_markup=reply_markup)
+        await query.edit_message_text(tags_info, reply_markup=reply_markup)
         
     except Exception as e:
-        query.edit_message_text(f"❌ Ошибка при чтении тегов: {e}")
+        await query.edit_message_text(f"❌ Ошибка при чтении тегов: {e}")
 
-def handle_text(update: Update, context: CallbackContext):
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обрабатывает текстовые сообщения"""
     if 'waiting_for' not in context.user_data:
         return
@@ -172,13 +172,13 @@ def handle_text(update: Update, context: CallbackContext):
         audio.save()
         del context.user_data['waiting_for']
         
-        update.message.reply_text(f"✅ {action_text.capitalize()} успешно изменено!")
-        show_main_menu(update.message, "Что дальше?")
+        await update.message.reply_text(f"✅ {action_text.capitalize()} успешно изменено!")
+        await show_main_menu(update.message, "Что дальше?")
         
     except Exception as e:
-        update.message.reply_text(f"❌ Ошибка при изменении тега: {e}")
+        await update.message.reply_text(f"❌ Ошибка при изменении тега: {e}")
 
-def handle_photo(update: Update, context: CallbackContext):
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обрабатывает отправку фотографии из галереи"""
     if 'waiting_for' not in context.user_data or context.user_data['waiting_for'] != WAITING_FOR_PHOTO:
         return
@@ -188,8 +188,8 @@ def handle_photo(update: Update, context: CallbackContext):
     
     try:
         # Берем фото с наибольшим разрешением
-        photo_file = update.message.photo[-1].get_file()
-        photo_file.download(photo_path)
+        photo_file = await update.message.photo[-1].get_file()
+        await photo_file.download_to_drive(photo_path)
         
         # Читаем данные обложки
         with open(photo_path, 'rb') as f:
@@ -223,19 +223,19 @@ def handle_photo(update: Update, context: CallbackContext):
         # Убираем состояние ожидания
         del context.user_data['waiting_for']
         
-        update.message.reply_text("✅ Обложка успешно обновлена!")
-        show_main_menu(update.message, "Что дальше?")
+        await update.message.reply_text("✅ Обложка успешно обновлена!")
+        await show_main_menu(update.message, "Что дальше?")
         
     except Exception as e:
         logger.error(f"Ошибка при установке обложки: {e}")
-        update.message.reply_text("❌ Не удалось установить обложку. Попробуйте другой файл.")
+        await update.message.reply_text("❌ Не удалось установить обложку. Попробуйте другой файл.")
         
     finally:
         # Удаляем временный файл обложки
         if os.path.exists(photo_path):
             os.remove(photo_path)
 
-def send_edited_file(query, context):
+async def send_edited_file(query, context):
     """Отправляет отредактированный файл пользователю"""
     file_path = context.user_data['current_file_path']
     
@@ -257,7 +257,7 @@ def send_edited_file(query, context):
         )
         
         with open(file_path, 'rb') as audio_file:
-            query.message.reply_audio(
+            await query.message.reply_audio(
                 audio=audio_file,
                 caption=caption,
                 title=title,
@@ -269,34 +269,30 @@ def send_edited_file(query, context):
             os.remove(file_path)
             del context.user_data['current_file_path']
             
-        show_main_menu(query.message, "Файл отправлен! Что дальше?")
+        await show_main_menu(query.message, "Файл отправлен! Что дальше?")
         
     except Exception as e:
-        query.edit_message_text(f"❌ Ошибка при отправке файла: {e}")
+        await query.edit_message_text(f"❌ Ошибка при отправке файла: {e}")
 
 def main():
     """Запускает бота"""
-    # Создаем Updater
-    updater = Updater(BOT_TOKEN, use_context=True)
-    
-    # Получаем dispatcher для регистрации обработчиков
-    dp = updater.dispatcher
+    # Создаем Application
+    application = Application.builder().token(BOT_TOKEN).build()
     
     # Обработчики команд
-    dp.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("start", start))
     
     # Обработчики кнопок
-    dp.add_handler(CallbackQueryHandler(button_handler))
+    application.add_handler(CallbackQueryHandler(button_handler))
     
     # Обработчики сообщений
-    dp.add_handler(MessageHandler(Filters.audio, handle_audio))
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text))
-    dp.add_handler(MessageHandler(Filters.photo, handle_photo))
+    application.add_handler(MessageHandler(filters.AUDIO, handle_audio))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     
     # Запускаем бота
     print("🚀 Бот запущен в режиме polling...")
-    updater.start_polling()
-    updater.idle()
+    application.run_polling()
 
 if __name__ == '__main__':
     main()
