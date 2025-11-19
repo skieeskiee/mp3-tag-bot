@@ -61,15 +61,6 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['current_file_path'] = file_path
         context.user_data['original_file_id'] = audio_file.file_id
         
-        # Инициализируем ID3 теги если их нет
-        try:
-            audio = MP3(file_path, ID3=ID3)
-            if audio.tags is None:
-                audio.add_tags()
-                audio.save()
-        except:
-            pass
-            
         await show_main_menu(update.message, "✅ Файл получен! Выберите действие:")
         
     except Exception as e:
@@ -135,19 +126,11 @@ async def show_current_tags(query, context):
         if 'TPE1' in audio:
             artist = str(audio['TPE1'])
         
-        # Проверяем наличие обложки
-        has_cover = False
-        if audio.tags:
-            for key in audio.tags.keys():
-                if key.startswith('APIC'):
-                    has_cover = True
-                    break
-        
         tags_info = (
             "📊 Текущие теги:\n\n"
             f"📝 Название: {title}\n"
             f"🎤 Исполнитель: {artist}\n"
-            f"🖼️ Обложка: {'✅ Есть' if has_cover else '❌ Нет'}"
+            f"🖼️ Обложка: {'❌ Нет'}"
         )
         
         keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="back_to_menu")]]
@@ -169,6 +152,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         audio = MP3(file_path, ID3=ID3)
+        
+        # Убедимся, что теги существуют
+        if audio.tags is None:
+            audio.add_tags()
         
         if waiting_for == WAITING_FOR_TITLE:
             audio['TIT2'] = TIT2(encoding=3, text=user_text)
@@ -193,11 +180,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     file_path = context.user_data['current_file_path']
-    photo_path = f"temp_cover_{update.update_id}.jpg"
     
     try:
         # Берем фото с наибольшим разрешением
         photo_file = await update.message.photo[-1].get_file()
+        photo_path = f"temp_cover_{update.update_id}.jpg"
         await photo_file.download_to_drive(photo_path)
         
         # Читаем данные обложки
@@ -211,12 +198,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if audio.tags is None:
             audio.add_tags()
         
-        # Удаляем старые обложки
-        apic_keys = [key for key in audio.tags.keys() if key.startswith('APIC')]
-        for key in apic_keys:
-            del audio.tags[key]
-        
-        # Добавляем новую обложку
+        # Добавляем обложку
         audio.tags.add(
             APIC(
                 encoding=3,
@@ -237,11 +219,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     except Exception as e:
         logger.error(f"Ошибка при установке обложки: {e}")
-        await update.message.reply_text("❌ Не удалось установить обложку. Попробуйте другой файл.")
+        await update.message.reply_text("❌ Не удалось установить обложку.")
         
     finally:
         # Удаляем временный файл обложки
-        if os.path.exists(photo_path):
+        if 'photo_path' in locals() and os.path.exists(photo_path):
             os.remove(photo_path)
 
 async def send_edited_file(query, context):
@@ -254,15 +236,10 @@ async def send_edited_file(query, context):
         title = str(audio['TIT2']) if 'TIT2' in audio else "Не указано"
         artist = str(audio['TPE1']) if 'TPE1' in audio else "Не указано"
         
-        has_cover = False
-        if audio.tags:
-            has_cover = any(key.startswith('APIC') for key in audio.tags.keys())
-        
         caption = (
             f"✅ Ваш отредактированный файл готов!\n\n"
             f"📝 Название: {title}\n"
-            f"🎤 Исполнитель: {artist}\n"
-            f"🖼️ Обложка: {'✅ Есть' if has_cover else '❌ Нет'}"
+            f"🎤 Исполнитель: {artist}"
         )
         
         with open(file_path, 'rb') as audio_file:
