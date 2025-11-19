@@ -43,29 +43,31 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обрабатывает входящий MP3-файл"""
     audio_file = update.message.audio
     
-    if audio_file.mime_type != "audio/mpeg":
+    if not audio_file or audio_file.mime_type != "audio/mpeg":
         await update.message.reply_text("❌ Пожалуйста, отправьте файл в формате MP3.")
         return
 
-    # Скачиваем файл
-    file = await audio_file.get_file()
-    file_path = f"temp_{audio_file.file_id}.mp3"
-    await file.download_to_drive(file_path)
-    
-    # Сохраняем информацию о файле
-    context.user_data['current_file_path'] = file_path
-    context.user_data['original_file_id'] = audio_file.file_id
-    
-    # Инициализируем ID3 теги если их нет
     try:
+        # Скачиваем файл
+        file = await audio_file.get_file()
+        file_path = f"temp_{audio_file.file_id}.mp3"
+        await file.download_to_drive(file_path)
+        
+        # Сохраняем информацию о файле
+        context.user_data['current_file_path'] = file_path
+        context.user_data['original_file_id'] = audio_file.file_id
+        
+        # Инициализируем ID3 теги если их нет
         audio = MP3(file_path, ID3=ID3)
         if audio.tags is None:
             audio.add_tags()
             audio.save()
+            
+        await show_main_menu(update.message, "✅ Файл получен! Выберите действие:")
+        
     except Exception as e:
-        logger.error(f"Ошибка инициализации тегов: {e}")
-    
-    await show_main_menu(update.message, "✅ Файл получен! Выберите действие:")
+        logger.error(f"Ошибка при обработке аудио: {e}")
+        await update.message.reply_text("❌ Ошибка при обработке файла. Попробуйте другой файл.")
 
 async def show_main_menu(message, text="Выберите действие:"):
     """Показывает главное меню с кнопками"""
@@ -276,23 +278,28 @@ async def send_edited_file(query, context):
 
 def main():
     """Запускает бота"""
-    # Создаем Application
-    application = Application.builder().token(BOT_TOKEN).build()
-    
-    # Обработчики команд
-    application.add_handler(CommandHandler("start", start))
-    
-    # Обработчики кнопок
-    application.add_handler(CallbackQueryHandler(button_handler))
-    
-    # Обработчики сообщений
-    application.add_handler(MessageHandler(filters.AUDIO, handle_audio))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    
-    # Запускаем бота
-    print("🚀 Бот запущен в режиме polling...")
-    application.run_polling()
+    try:
+        # Создаем Application
+        application = Application.builder().token(BOT_TOKEN).build()
+        
+        # Обработчики команд
+        application.add_handler(CommandHandler("start", start))
+        
+        # Обработчики кнопок
+        application.add_handler(CallbackQueryHandler(button_handler))
+        
+        # Обработчики сообщений
+        application.add_handler(MessageHandler(filters.AUDIO, handle_audio))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+        application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+        
+        # Запускаем бота
+        print("🚀 Бот запущен в режиме polling...")
+        application.run_polling()
+        
+    except Exception as e:
+        logger.error(f"Ошибка при запуске бота: {e}")
+        print(f"❌ Критическая ошибка: {e}")
 
 if __name__ == '__main__':
     main()
